@@ -1,0 +1,64 @@
+name: PR / Checks / Checklist
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  security-checklist:
+    name: Security Checklist
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a complete security checklist
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const startMarker = '<!-- security-checklist:start -->';
+            const endMarker = '<!-- security-checklist:end -->';
+            const deadline = Date.now() + 10_000;
+            let body = '';
+
+            do {
+              const { data: pullRequest } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+              });
+              body = pullRequest.body || '';
+
+              if (body.includes(startMarker) && body.includes(endMarker)) break;
+
+              const remaining = deadline - Date.now();
+              if (remaining <= 0) break;
+              await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, remaining)));
+            } while (Date.now() < deadline);
+
+            const required = [
+              'I did not add secrets, credentials, tokens, or private data.',
+              'I considered input validation, authorization, and access control.',
+              'I considered dependency, infrastructure, and deployment security impact.',
+              'I added or updated security-relevant tests where appropriate.',
+              'I confirmed this change does not weaken logging, monitoring, or incident response.',
+            ];
+
+            if (!body.includes(startMarker) || !body.includes(endMarker)) {
+              core.setFailed('The routed security checklist did not appear in the PR body within 10 seconds.');
+              return;
+            }
+
+            const incomplete = required.filter((item) => {
+              const escaped = item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return !new RegExp(`^- \\[x\\] ${escaped}$`, 'mi').test(body);
+            });
+
+            if (incomplete.length > 0) {
+              core.setFailed(`Complete every security checklist item before merging:\n- ${incomplete.join('\n- ')}`);
+            }
